@@ -37,6 +37,7 @@ export const addMetadata = (
 
 // this is adapted from urql's ssrExchange
 
+
 /** A serialized version of an {@link OperationResult}.
  *
  * @remarks
@@ -54,7 +55,7 @@ export interface SerializedResult {
   extensions?: string | undefined;
   /** JSON version of {@link CombinedError}. */
   error?: {
-    graphQLErrors: Array<Partial</*GraphQLError*/ any> | string>;
+    graphQLErrors: Array<Partial<any> | string>;
     networkError?: string;
   };
 }
@@ -69,6 +70,10 @@ export interface SSRData {
   [key: string]: SerializedResult;
 }
 
+export interface SSRDataStorage {
+  [key: string]: SerializedResult | null;
+}
+
 /** Options for the `ssrExchange` allowing it to either operate on the server- or client-side. */
 export interface SSRExchangeParams {
   /** Indicates to the {@link SSRExchange} whether it's currently in server-side or client-side mode.
@@ -79,7 +84,16 @@ export interface SSRExchangeParams {
    * use its deserialized data and replay results from it.
    */
   isClient?: boolean;
-
+  /** May be used on the client-side to pass the {@link SSRExchange} serialized data from the server-side.
+   *
+   * @remarks
+   * Alternatively, {@link SSRExchange.restoreData} may be called to imperatively add serialized data to
+   * the exchange.
+   *
+   * Hint: This method also works on the server-side to add to the initial serialized data, which enables
+   * you to combine multiple {@link SSRExchange} results, as needed.
+   */
+  initialState?: SSRData;
   /** Forces a new API request to be sent in the background after replaying the deserialized result.
    *
    * @remarks
@@ -99,10 +113,34 @@ export interface SSRExchangeParams {
    */
   includeExtensions?: boolean;
 
+  storage?: SSRDataStorage;
+}
 
-  // new options
-  getStreamedQuery: (operation: Operation) => SerializedResult;
-  streamQuery: (result: OperationResult, serializedResult: SerializedResult) => void;
+/** An `SSRExchange` either in server-side mode, serializing results, or client-side mode, deserializing and replaying results..
+ *
+ * @remarks
+ * This same {@link Exchange} is used in your code both for the client-side and server-side as it’s “universal”
+ * and can be put into either client-side or server-side mode using the {@link SSRExchangeParams.isClient} flag.
+ *
+ * In server-side mode, the `ssrExchange` will “record” results it sees from your API and provide them for you
+ * to send to the client-side using the {@link SSRExchange.extractData} method.
+ *
+ * In client-side mode, the `ssrExchange` will use these serialized results, rehydrated either using
+ * {@link SSRExchange.restoreData} or {@link SSRexchangeParams.initialState}, to replay results the
+ * server-side has seen and sent before.
+ *
+ * Each serialized result will only be replayed once, as it’s assumed that your cache exchange will have the
+ * results cached afterwards.
+ */
+export interface SSRExchange extends Exchange {
+  /** Client-side method to add serialized results to the {@link SSRExchange}.
+   * @param data - {@link SSRData},
+   */
+  restoreData(data: SSRData): void;
+  /** Server-side method to get all serialized results the {@link SSRExchange} has captured.
+   * @returns an {@link SSRData} dictionary.
+   */
+  extractData(): SSRData;
 }
 
 /** Serialize an OperationResult to plain JSON */
@@ -124,7 +162,7 @@ const serializeResult = (
 
   if (result.error) {
     serialized.error = {
-      graphQLErrors: result.error.graphQLErrors.map((error) => {
+      graphQLErrors: result.error.graphQLErrors.map(error => {
         if (!error.path && !error.extensions) return error.message;
 
         return {
@@ -136,7 +174,7 @@ const serializeResult = (
     };
 
     if (result.error.networkError) {
-      serialized.error.networkError = "" + result.error.networkError;
+      serialized.error.networkError = '' + result.error.networkError;
     }
   }
 
@@ -187,10 +225,10 @@ const revalidated = new Set<number>();
  * Hint: The `ssrExchange` is basically an exchange that acts like a replacement for any fetch exchange
  * temporarily. As such, you should place it after your cache exchange but in front of any fetch exchange.
  */
-export const ssrExchange = (params: SSRExchangeParams) => {
+export const ssrExchange = (params: SSRExchangeParams = {}): SSRExchange => {
   const staleWhileRevalidate = !!params.staleWhileRevalidate;
   const includeExtensions = !!params.includeExtensions;
-  const data: Record<string, SerializedResult | null> = {};
+  const data: Record<string, SerializedResult | null> = params.storage ?? {};
 
   // On the client-side, we delete results from the cache as they're resolved
   // this is delayed so that concurrent queries don't delete each other's data
@@ -209,23 +247,24 @@ export const ssrExchange = (params: SSRExchangeParams) => {
 
   // The SSR Exchange is a temporary cache that can populate results into data for suspense
   // On the client it can be used to retrieve these temporary results from a rehydrated cache
-  const ssr : Exchange =
+  const ssr: SSRExchange =
     ({ client, forward }) =>
-    (ops$) => {
+    ops$ => {
       // params.isClient tells us whether we're on the client-side
       // By default we assume that we're on the client if suspense-mode is disabled
       const isClient =
-        params && typeof params.isClient === "boolean"
+        params && typeof params.isClient === 'boolean'
           ? !!params.isClient
           : !client.suspense;
+
       let forwardedOps$ = pipe(
         ops$,
         filter(
-          (operation) =>
-            operation.kind === "teardown" ||
-            !params.getStreamedQuery(operation) ||
-            !!params.getStreamedQuery?.(operation)!.hasNext ||
-            operation.context.requestPolicy === "network-only"
+          operation =>
+            operation.kind === 'teardown' ||
+            !data[operation.key] ||
+            !!data[operation.key]!.hasNext ||
+            operation.context.requestPolicy === 'network-only'
         ),
         map(mapTypeNames),
         forward
@@ -236,13 +275,13 @@ export const ssrExchange = (params: SSRExchangeParams) => {
       let cachedOps$ = pipe(
         ops$,
         filter(
-          (operation) =>
-            operation.kind !== "teardown" &&
-            !!params.getStreamedQuery(operation) &&
-            operation.context.requestPolicy !== "network-only"
+          operation =>
+            operation.kind !== 'teardown' &&
+            !!data[operation.key] &&
+            operation.context.requestPolicy !== 'network-only'
         ),
-        map((op) => {
-          const serialized = params.getStreamedQuery(op)!
+        map(op => {
+          const serialized = data[op.key]!;
           const cachedResult = deserializeResult(
             op,
             serialized,
@@ -258,7 +297,7 @@ export const ssrExchange = (params: SSRExchangeParams) => {
           const result: OperationResult = {
             ...cachedResult,
             operation: addMetadata(op, {
-              cacheOutcome: "hit",
+              cacheOutcome: 'hit',
             }),
           };
           return result;
@@ -271,9 +310,9 @@ export const ssrExchange = (params: SSRExchangeParams) => {
           forwardedOps$,
           tap((result: OperationResult) => {
             const { operation } = result;
-            if (operation.kind !== "mutation") {
+            if (operation.kind !== 'mutation') {
               const serialized = serializeResult(result, includeExtensions);
-              params.streamQuery(result, serialized);
+              data[operation.key] = serialized;
             }
           })
         );
@@ -284,6 +323,25 @@ export const ssrExchange = (params: SSRExchangeParams) => {
 
       return merge([forwardedOps$, cachedOps$]);
     };
+
+  ssr.restoreData = (restore: SSRData) => {
+    for (const key in restore) {
+      // We only restore data that hasn't been previously invalidated
+      if (data[key] !== null) {
+        data[key] = restore[key];
+      }
+    }
+  };
+
+  ssr.extractData = () => {
+    const result: SSRData = {};
+    for (const key in data) if (data[key] != null) result[key] = data[key]!;
+    return result;
+  };
+
+  if (params && params.initialState) {
+    ssr.restoreData(params.initialState);
+  }
 
   return ssr;
 };

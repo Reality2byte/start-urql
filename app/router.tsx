@@ -7,29 +7,43 @@ import {
   cacheExchange,
   fetchExchange,
   Exchange,
-  Operation,
 } from "urql";
-import { ssrExchange } from "./exchange";
+import { SSRDataStorage, ssrExchange } from "./exchange";
 
 export function createRouter() {
-  function getKey(operation: Operation) {
-    return "__URQL__" + operation.key;
+  function getKey(key: string) {
+    return `__URQL__${key}`;
   }
-  const ssr = ssrExchange({
-    isClient: typeof document !== "undefined",
-    streamQuery: (result, serializedResult) => {
-      const key = getKey(result.operation);
-      if (router.streamedKeys.has(key)) {
-        return;
+  const storage: SSRDataStorage = new Proxy({} as SSRDataStorage, {
+    get(_, prop) {
+      if (typeof prop === "string") {
+        return router.getStreamedValue(getKey(prop));
       }
-      router.streamValue(key, serializedResult);
+      return undefined;
     },
-    getStreamedQuery: (op) => {
-      return router.getStreamedValue<any>(getKey(op));
+    set(_, prop, value) {
+      if (typeof prop === "string") {
+        if (router.isServer) {
+          router.streamValue(getKey(prop), value);
+        }
+        return true;
+      }
+      return false;
+    },
+    has(_, prop) {
+      if (typeof prop === "string") {
+        return router.getStreamedValue(getKey(prop)) !== undefined;
+      }
+      return false;
     },
   });
 
-  // ssr must be before fetchExchange!
+  const ssr = ssrExchange({
+    isClient: typeof document !== "undefined",
+    storage,
+  });
+
+  // ssr must be between cacheExchange and fetchExchange!
   const exchanges: Exchange[] = [cacheExchange, ssr, fetchExchange];
 
   const urqlClient = new Client({
