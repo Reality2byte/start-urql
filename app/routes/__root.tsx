@@ -1,12 +1,17 @@
 import {
+  Link,
   Outlet,
   ScrollRestoration,
   createRootRoute,
+  createRootRouteWithContext,
 } from '@tanstack/react-router'
 import { Meta, Scripts } from '@tanstack/start'
 import type { ReactNode } from 'react'
-
-export const Route = createRootRoute({
+import type { Client } from 'urql'
+interface RouterContext {
+  urqlClient: Client
+}
+export const Route = createRootRouteWithContext<RouterContext>()({
   head: () => ({
     meta: [
       {
@@ -27,6 +32,7 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <RootDocument>
+      <Link to="/">Home</Link>{' '}<Link to="/foo">Foo</Link>
       <Outlet />
     </RootDocument>
   )
