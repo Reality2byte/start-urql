@@ -7,42 +7,13 @@ import {
   cacheExchange,
   fetchExchange,
   Exchange,
+  ssrExchange,
 } from "urql";
-import { SSRDataStorage, ssrExchange } from "./exchange";
+import { UrqlProvider } from "./@urql/tanstack-start/Provider";
 
 export function createRouter() {
-  function getKey(key: string) {
-    return `__URQL__${key}`;
-  }
-  const storage: SSRDataStorage = new Proxy({} as SSRDataStorage, {
-    get(_, prop) {
-      if (typeof prop === "string") {
-        return router.getStreamedValue(getKey(prop));
-      }
-      return undefined;
-    },
-    set(_, prop, value) {
-      if (typeof prop === "string") {
-        if (router.isServer) {
-          router.streamValue(getKey(prop), value);
-        }
-        return true;
-      }
-      return false;
-    },
-    has(_, prop) {
-      if (typeof prop === "string") {
-        return router.getStreamedValue(getKey(prop)) !== undefined;
-      }
-      return false;
-    },
-  });
-
-  const ssr = ssrExchange({
-    isClient: typeof document !== "undefined",
-    storage,
-  });
-
+  
+  const ssr = ssrExchange({isClient: typeof window !== "undefined"});
   // ssr must be between cacheExchange and fetchExchange!
   const exchanges: Exchange[] = [cacheExchange, ssr, fetchExchange];
 
@@ -57,7 +28,7 @@ export function createRouter() {
     context: {
       urqlClient,
     },
-    Wrap: ({ children }) => <Provider value={urqlClient}>{children}</Provider>,
+    Wrap: ({ children }) => <UrqlProvider ssr={ssr} client={urqlClient}>{children}</UrqlProvider>,
   });
   return router;
 }

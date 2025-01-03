@@ -11,12 +11,10 @@
   "dependencies": {
     "@tanstack/react-router": "^1.93.0",
     "@tanstack/start": "^1.93.0",
-    "@urql/core": "^5.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "urql": "^4.2.1",
-    "vinxi": "0.5.1",
-    "wonka": "^6.3.4"
+    "vinxi": "0.5.1"
   },
   "devDependencies": {
     "@types/react": "^19.0.2"

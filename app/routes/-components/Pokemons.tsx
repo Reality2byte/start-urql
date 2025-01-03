@@ -1,4 +1,5 @@
-import { gql, useQuery } from "urql";
+import { gql } from "urql";
+import { useQuery } from "../../@urql/tanstack-start/useQuery";
 
 const PokemonsQuery = gql`
   query {
